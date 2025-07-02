@@ -1,34 +1,32 @@
 export default async function handler(req, res) {
-  const { sku } = req.query;
+  const sku = req.query.sku;
+  const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 
   if (!sku) {
-    return res.status(400).json({ error: "Missing SKU parameter" });
+    return res.status(400).json({ error: "Missing SKU in query." });
   }
 
-  const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-  const BASE_ID = "appXXDxqsKzF2RoF4"; // your actual base ID
-  const TABLE_NAME = "Produce";
+  const baseId = "appXXDxqsKzF2RoF4"; // your base ID
+  const tableName = "Produce";
+  const formula = `filterByFormula={SKU}='${sku}'`;
 
-  const filterFormula = encodeURIComponent(`{SKU}='${sku}'`);
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_NAME}?filterByFormula=${filterFormula}`;
+  const url = `https://api.airtable.com/v0/${baseId}/${tableName}?${formula}`;
 
   try {
-    const airtableRes = await fetch(url, {
+    const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
       },
     });
 
-    const data = await airtableRes.json();
+    const data = await response.json();
 
     if (!data.records || data.records.length === 0) {
       return res.status(404).json({ error: "No matching record found." });
     }
 
-    const record = data.records[0].fields;
-
-    res.status(200).json({ record });
-  } catch (err) {
-    res.status(500).json({ error: "Server error", details: err.message });
+    return res.status(200).json(data.records[0]);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to fetch from Airtable." });
   }
 }
