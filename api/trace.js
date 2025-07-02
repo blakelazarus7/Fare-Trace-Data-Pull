@@ -20,7 +20,8 @@ export default async function handler(req, res) {
   }
 
   const formula = encodeURIComponent(`{SKU}="${sku}"`);
-  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${formula}`;
+  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${formula}&expand=SKU%20Farm`;
+
 
   try {
     const response = await fetch(url, {
