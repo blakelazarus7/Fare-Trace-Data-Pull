@@ -4,7 +4,8 @@ export default async function handler(req, res) {
   const BASE_ID = 'appXXDxqsKzF2RoF4';
   const TABLE_NAME = 'Produce';
 
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_NAME}?filterByFormula=({SKU Slug}="${sku}")`;
+  const formula = encodeURIComponent(`{SKU Slug}='${sku}'`);
+const url = `https://api.airtable.com/v0/${BASE_ID}/${TABLE_NAME}?filterByFormula=${formula}`;
 
   try {
     const airtableRes = await fetch(url, {
