@@ -11,8 +11,8 @@ export default async function handler(req, res) {
   }
 
   const sku = req.query.sku;
-  const AIRTABLE_API_KEY = 'YOUR_KEY_HERE';
-  const baseId = 'YOUR_BASE_ID_HERE';
+  const AIRTABLE_API_KEY = 'patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a';
+  const baseId = 'appXXDxqsKzF2RoF4';
   const table = 'Produce';
 
   if (!sku) {
