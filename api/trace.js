@@ -1,6 +1,6 @@
 export default async function handler(req, res) {
   const sku = req.query.sku;
-  const AIRTABLE_API_KEY = 'patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a';
+  const AIRTABLE_API_KEY = 'YOUR_KEY_HERE';
   const baseId = 'appXXDxqsKzF2RoF4';
   const table = 'Produce';
 
@@ -12,9 +12,6 @@ export default async function handler(req, res) {
   const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${formula}`;
 
   try {
-    console.log('✅ Fetching Airtable with SKU:', sku);
-    console.log('🔗 Airtable URL:', url);
-
     const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
@@ -23,15 +20,14 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
-    console.log('📦 Airtable response:', JSON.stringify(data));
 
     if (!data.records || data.records.length === 0) {
-      return res.status(404).json({ error: 'No matching record found.', debug: { sku, url } });
+      return res.status(404).json({ error: 'No matching record found.' });
     }
 
-    return res.status(200).json(data.records[0]);
+    // Just return the fields
+    return res.status(200).json(data.records[0].fields);
   } catch (err) {
-    console.error('❌ Fetch failed:', err);
     return res.status(500).json({ error: 'Fetch failed', detail: err.message });
   }
 }
