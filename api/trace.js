@@ -1,7 +1,18 @@
 export default async function handler(req, res) {
+  // ✅ Set proper CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Vary", "Origin");
+
+  // ✅ Handle CORS preflight request
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   const sku = req.query.sku;
   const AIRTABLE_API_KEY = 'YOUR_KEY_HERE';
-  const baseId = 'appXXDxqsKzF2RoF4';
+  const baseId = 'YOUR_BASE_ID_HERE';
   const table = 'Produce';
 
   if (!sku) {
@@ -22,11 +33,10 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!data.records || data.records.length === 0) {
-      return res.status(404).json({ error: 'No matching record found.' });
+      return res.status(404).json({ error: 'No matching record found.', debug: { sku, url } });
     }
 
-    // Just return the fields
-    return res.status(200).json(data.records[0].fields);
+    return res.status(200).json(data.records[0]);
   } catch (err) {
     return res.status(500).json({ error: 'Fetch failed', detail: err.message });
   }
