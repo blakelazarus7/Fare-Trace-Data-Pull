@@ -1,16 +1,15 @@
 export default async function handler(req, res) {
   const sku = req.query.sku;
-const AIRTABLE_API_KEY = "patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a";
+  const AIRTABLE_API_KEY = "patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a";
 
   if (!sku) {
     return res.status(400).json({ error: "Missing SKU in query." });
   }
 
-  const baseId = "appXXDxqsKzF2RoF4"; // your base ID
+  const baseId = "appXXDxqsKzF2RoF4";
   const tableName = "Produce";
-  const formula = `filterByFormula={SKU}='${sku}'`;
-
-  const url = `https://api.airtable.com/v0/${baseId}/${tableName}?${formula}`;
+  const formula = encodeURIComponent(`{SKU}='${sku}'`);
+  const url = `https://api.airtable.com/v0/${baseId}/${tableName}?filterByFormula=${formula}`;
 
   try {
     const response = await fetch(url, {
