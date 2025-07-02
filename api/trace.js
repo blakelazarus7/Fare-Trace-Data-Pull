@@ -1,44 +1,51 @@
 export default async function handler(req, res) {
-  // ✅ Set proper CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Vary", "Origin");
-
-  // ✅ Handle CORS preflight request
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  const sku = req.query.sku;
-  const AIRTABLE_API_KEY = 'patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a';
-  const baseId = 'appXXDxqsKzF2RoF4';
-  const table = 'Produce';
+  const { sku } = req.query;
 
   if (!sku) {
-    return res.status(400).json({ error: 'Missing SKU in query.' });
+    return res.status(400).json({ error: "SKU parameter is required" });
   }
 
-  const formula = encodeURIComponent(`{SKU}="${sku}"`);
-  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${formula}&expand=SKU%20Farm`;
+  const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+  const baseId = "appXXXXXXXXXXXXXX"; // Replace with your actual Airtable base ID
+  const table = "Produce";
 
+  const formula = `SKU="${sku}"`;
+  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1&view=Grid%20view&expand=SKU%20Farm`;
 
   try {
-    const response = await fetch(url, {
+    const airtableRes = await fetch(url, {
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+        "Content-Type": "application/json"
+      }
     });
 
-    const data = await response.json();
+    const json = await airtableRes.json();
 
-    if (!data.records || data.records.length === 0) {
-      return res.status(404).json({ error: 'No matching record found.', debug: { sku, url } });
+    if (!json.records || json.records.length === 0) {
+      return res.status(404).json({ error: "SKU not found" });
     }
 
-    return res.status(200).json(data.records[0]);
-  } catch (err) {
-    return res.status(500).json({ error: 'Fetch failed', detail: err.message });
+    const record = json.records[0];
+    const fields = record.fields;
+
+    // ✅ Use exact field name: "Farm Location"
+    let farmLocation = "Unknown";
+    if (fields["SKU Farm"] && Array.isArray(fields["SKU Farm"])) {
+      const farm = fields["SKU Farm"][0];
+      if (farm.fields && farm.fields["Farm Location"]) {
+        farmLocation = farm.fields["Farm Location"];
+      }
+    }
+
+    res.status(200).json({
+      fields: {
+        ...fields,
+        FarmLocation: farmLocation
+      }
+    });
+  } catch (error) {
+    console.error("Airtable fetch error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 }
