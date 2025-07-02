@@ -8,13 +8,14 @@ export default async function handler(req, res) {
 
   const baseId = "appXXDxqsKzF2RoF4";
   const tableName = "Produce";
-  const formula = encodeURIComponent(`{SKU}='${sku}'`);
+  const formula = encodeURIComponent(`{SKU}="${sku}"`);
   const url = `https://api.airtable.com/v0/${baseId}/${tableName}?filterByFormula=${formula}`;
 
   try {
     const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+        "Content-Type": "application/json",
       },
     });
 
@@ -26,6 +27,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json(data.records[0]);
   } catch (error) {
-    return res.status(500).json({ error: "Failed to fetch from Airtable." });
+    return res.status(500).json({ error: "Failed to fetch from Airtable.", details: error.message });
   }
 }
