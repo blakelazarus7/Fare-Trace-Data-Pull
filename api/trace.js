@@ -1,51 +1,38 @@
+
 export default async function handler(req, res) {
-  const { sku } = req.query;
+  const sku = req.query.sku;
+  const AIRTABLE_API_KEY = 'patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a';
+  const baseId = 'appXXDxqsKzF2RoF4';
+  const table = 'Produce';
 
   if (!sku) {
-    return res.status(400).json({ error: "SKU parameter is required" });
+    return res.status(400).json({ error: 'Missing SKU in query.' });
   }
 
-  const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-  const baseId = "appXXXXXXXXXXXXXX"; // Replace with your actual Airtable base ID
-  const table = "Produce";
-
-  const formula = `SKU="${sku}"`;
-  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1&view=Grid%20view&expand=SKU%20Farm`;
+  const formula = encodeURIComponent(`{SKU}="${sku}"`);
+  const url = `https://api.airtable.com/v0/${baseId}/${table}?filterByFormula=${formula}`;
 
   try {
-    const airtableRes = await fetch(url, {
+    console.log('✅ Fetching Airtable with SKU:', sku);
+    console.log('🔗 Airtable URL:', url);
+
+    const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        "Content-Type": "application/json"
-      }
+        'Content-Type': 'application/json',
+      },
     });
 
-    const json = await airtableRes.json();
+    const data = await response.json();
+    console.log('📦 Airtable response:', JSON.stringify(data));
 
-    if (!json.records || json.records.length === 0) {
-      return res.status(404).json({ error: "SKU not found" });
+    if (!data.records || data.records.length === 0) {
+      return res.status(404).json({ error: 'No matching record found.', debug: { sku, url } });
     }
 
-    const record = json.records[0];
-    const fields = record.fields;
-
-    // ✅ Use exact field name: "Farm Location"
-    let farmLocation = "Unknown";
-    if (fields["SKU Farm"] && Array.isArray(fields["SKU Farm"])) {
-      const farm = fields["SKU Farm"][0];
-      if (farm.fields && farm.fields["Farm Location"]) {
-        farmLocation = farm.fields["Farm Location"];
-      }
-    }
-
-    res.status(200).json({
-      fields: {
-        ...fields,
-        FarmLocation: farmLocation
-      }
-    });
-  } catch (error) {
-    console.error("Airtable fetch error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(200).json(data.records[0]);
+  } catch (err) {
+    console.error('❌ Fetch failed:', err);
+    return res.status(500).json({ error: 'Fetch failed', detail: err.message });
   }
 }
