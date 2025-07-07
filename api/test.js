@@ -1,10 +1,8 @@
 export default async function handler(req, res) {
-  // ✅ Allow requests from your site
   res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // ✅ Respond to preflight requests
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -35,10 +33,8 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'No matching record found.' });
     }
 
-    return res.status(200).json({
-      success: true,
-      record: data.records[0],
-    });
+    // ✅ Return fields directly
+    return res.status(200).json(data.records[0]);
   } catch (err) {
     return res.status(500).json({ error: 'Fetch failed', detail: err.message });
   }
