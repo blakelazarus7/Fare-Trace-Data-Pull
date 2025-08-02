@@ -44,9 +44,11 @@ res.status(200).json({
     variety: record["SKU Variety"],
     location: record["Farm Location"],
     coaDate: record["Current COA Test Date"],
-    image: record.Photo?.[0]?.url || ""
+    image: record.Photo?.[0]?.url || "",
+    videos: record.Video?.map(v => v.url) || [] // ✅ Add this line
   }
 });
+    
   } catch (err) {
     return res.status(500).json({ error: 'Fetch failed', detail: err.message });
   }
