@@ -45,9 +45,8 @@ res.status(200).json({
     location: record["Farm Location"],
     coaDate: record["Current COA Test Date"],
     image: record.Photo?.[0]?.url || "",
-    videos: Array.isArray(record.Video) ? record.Video.map(v => v.url) : [],
-    youtube: record["Videos"]
-      ? record["Videos"].split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+    videos: record["Videos"]
+      ? record["Videos"].split(/[\n\s]+/).map(s => s.trim()).filter(Boolean)
       : []
   }
 });
