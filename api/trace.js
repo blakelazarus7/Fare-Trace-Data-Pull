@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     }
 
     const record = data.records[0].fields;
-
+    
 res.status(200).json({
   success: true,
   data: {
@@ -45,7 +45,7 @@ res.status(200).json({
     location: record["Farm Location"],
     coaDate: record["Current COA Test Date"],
     image: record.Photo?.[0]?.url || "",
-    videos: record.Video?.map(v => v.url) || [] // ✅ Add this line
+    videos: Array.isArray(record.Video) ? record.Video.map(v => v.url) : []
   }
 });
     
