@@ -30,19 +30,33 @@ export default async function handler(req, res) {
   }
 
   // Normalize names for soft matching
-  function normName(s) {
-    if (!s) return '';
-    let k = String(s).toLowerCase().trim();
-    // unify common variants
-    k = k.replace(/\bvitamin\s*b9\b/g, 'folate');
-    k = k.replace(/\bcarbohydrate(s)?\b/g, 'total carbohydrate');
-    k = k.replace(/\bcarbs?\b/g, 'total carbohydrate');
-    k = k.replace(/\bsugar(s)?\b/g, 'total sugars');
-    // collapse and strip
-    k = k.replace(/\s+/g, '');
-    k = k.replace(/[^a-z0-9]/g, '');
-    return k;
-  }
+ function normName(s) {
+  if (!s) return '';
+  let k = String(s).toLowerCase().trim();
+
+  // drop parentheticals: "Vitamin B6 (Pyridoxine)" -> "Vitamin B6"
+  k = k.replace(/\([^)]*\)/g, '').trim();
+
+  // unify common variants
+  k = k.replace(/\bvitamin\s*b9\b/g, 'folate');
+
+  // map COA phrases to DV canonical names you use in the table
+  k = k.replace(/\btotal\s+fat\b/g, 'fat');
+  k = k.replace(/\btotal\s+carbohydrate(s)?\b/g, 'carbohydrate');
+  // keep dietary fiber as-is (most DV tables use "Dietary Fiber")
+  // sugars: FDA has no %DV for Total Sugars; only map if you add a DV row
+  k = k.replace(/\btotal\s+sugars?\b/g, 'total sugars');
+
+  // common short forms
+  k = k.replace(/\bcarbs?\b/g, 'carbohydrate');
+  k = k.replace(/\bfiber\b/g, 'dietary fiber');
+  k = k.replace(/\bsugars?\b/g, 'total sugars');
+
+  // collapse/strip
+  k = k.replace(/\s+/g, '');
+  k = k.replace(/[^a-z0-9]/g, '');
+  return k;
+}
 
   // Basic mass conversions
   function convert(value, from, to) {
