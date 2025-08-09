@@ -10,16 +10,16 @@ export default async function handler(req, res) {
   const baseId = 'appXXDxqsKzF2RoF4';
   const produceTable = 'Produce';
   const farmsTable = 'Farms';
+  const DV_TABLE = 'Daily Value';
 
   if (!sku) return res.status(400).json({ error: 'Missing SKU in query.' });
 
   const formula = encodeURIComponent(`{SKU}="${sku}"`);
   const produceUrl = `https://api.airtable.com/v0/${baseId}/${produceTable}?filterByFormula=${formula}`;
 
-  // ------------------ ADD: helpers for DV + parsing ------------------
-  const DV_TABLE = 'Daily Value';
+  // ---------------- helpers (tiny, generic, no hardcoding of names) ----------------
 
-  // Parse "900mcg", "65 g", "2,000kcal" → { amount: 900, unit: 'mcg' }
+  // Parse "900mcg", "65 g", "2,000kcal" → { amount, unit }
   function parseAmountUnit(str) {
     if (!str) return { amount: null, unit: '' };
     const s = String(str).trim().replace(/,/g, '');
@@ -29,36 +29,53 @@ export default async function handler(req, res) {
     return { amount: Number(m[1]), unit };
   }
 
-  // Normalize names for soft matching
- function normName(s) {
-  if (!s) return '';
-  let k = String(s).toLowerCase().trim();
+  // Levenshtein distance (small, iterative)
+  function lev(a, b) {
+    a = a || ''; b = b || '';
+    const m = a.length, n = b.length;
+    if (!m) return n; if (!n) return m;
+    const dp = Array(n + 1);
+    for (let j = 0; j <= n; j++) dp[j] = j;
+    for (let i = 1; i <= m; i++) {
+      let prev = dp[0], cur;
+      dp[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const tmp = dp[j];
+        cur = (a[i - 1] === b[j - 1]) ? prev : Math.min(prev + 1, dp[j] + 1, dp[j - 1] + 1);
+        dp[j] = cur; prev = tmp;
+      }
+    }
+    return dp[n];
+  }
 
-  // drop parentheticals: "Vitamin B6 (Pyridoxine)" -> "Vitamin B6"
-  k = k.replace(/\([^)]*\)/g, '').trim();
+  // Tokenizer with stopword removal + light singularization
+  const STOP = new Set([
+    'total','dietary','added','soluble','insoluble','free','of','the','and','per'
+  ]);
+  function tokens(s) {
+    const base = String(s || '')
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, ' ')    // drop parentheticals
+      .replace(/vit\s*/g, 'vitamin ') // normalize "vit" → "vitamin"
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    const raw = base.split(/\s+/).filter(Boolean);
+    return raw
+      .filter(t => !STOP.has(t))
+      .map(t => t.replace(/s\b/, '')) // sugars→sugar, carbohydrates→carbohydrate
+      .filter(Boolean);
+  }
 
-  // unify common variants
-  k = k.replace(/\bvitamin\s*b9\b/g, 'folate');
+  // Jaccard overlap of two token sets
+  function jaccard(aTokens, bTokens) {
+    const A = new Set(aTokens), B = new Set(bTokens);
+    let inter = 0;
+    for (const t of A) if (B.has(t)) inter++;
+    const union = new Set([...A, ...B]).size || 1;
+    return inter / union;
+  }
 
-  // map COA phrases to DV canonical names you use in the table
-  k = k.replace(/\btotal\s+fat\b/g, 'fat');
-  k = k.replace(/\btotal\s+carbohydrate(s)?\b/g, 'carbohydrate');
-  // keep dietary fiber as-is (most DV tables use "Dietary Fiber")
-  // sugars: FDA has no %DV for Total Sugars; only map if you add a DV row
-  k = k.replace(/\btotal\s+sugars?\b/g, 'total sugars');
-
-  // common short forms
-  k = k.replace(/\bcarbs?\b/g, 'carbohydrate');
-  k = k.replace(/\bfiber\b/g, 'dietary fiber');
-  k = k.replace(/\bsugars?\b/g, 'total sugars');
-
-  // collapse/strip
-  k = k.replace(/\s+/g, '');
-  k = k.replace(/[^a-z0-9]/g, '');
-  return k;
-}
-
-  // Basic mass conversions
+  // Unit conversion for mass (g/mg/mcg); others pass through
   function convert(value, from, to) {
     if (value == null || isNaN(value)) return null;
     const f = (from || '').toLowerCase(), t = (to || '').toLowerCase();
@@ -69,13 +86,13 @@ export default async function handler(req, res) {
     if (f === 'mcg' && t === 'mg')  return value / 1000;
     if (f === 'g'   && t === 'mcg') return value * 1_000_000;
     if (f === 'mcg' && t === 'g')   return value / 1_000_000;
-    return value; // kcal, IU, etc → pass through (no %DV calc unless DV uses same unit)
+    return value; // kcal, IU, etc.
   }
 
-  // Fetch DV table, build soft-match map: normalized name/alias → { amount, unit, displayName }
+  // Load DV rows; return an array of entries, each with candidate names for matching
   async function loadDailyValues() {
-    const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(DV_TABLE)}`;
     const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' };
+    const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(DV_TABLE)}`;
     let records = [], offset = null;
     do {
       const url = offset ? `${baseUrl}?offset=${offset}` : baseUrl;
@@ -85,74 +102,84 @@ export default async function handler(req, res) {
       offset = json.offset;
     } while (offset);
 
-    const map = new Map();
-    for (const r of records) {
-      const name = r.fields['Name'];
-      const dvStr = r.fields['Daily Value']; // single text like "900mcg", "65g", "2000kcal"
-      if (!name || !dvStr) continue;
-      const { amount, unit } = parseAmountUnit(dvStr);
-      if (amount == null || !unit) continue;
+    return records
+      .map(r => {
+        const name = r.fields['Name'];
+        const dvStr = r.fields['Daily Value'];
+        if (!name || !dvStr) return null;
+        const { amount, unit } = parseAmountUnit(dvStr);
+        if (amount == null || !unit) return null;
 
-      const entry = { amount, unit, displayName: name };
+        // candidate names: Name + any Aliases
+        const aliases = String(r.fields['Aliases'] || '')
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+        const cand = [name, ...aliases];
 
-      // primary key
-      map.set(normName(name), entry);
-
-      // optional: support "Aliases" column (comma separated). If you don’t have it, this is harmless.
-      const aliases = r.fields['Aliases'];
-      if (aliases) {
-        String(aliases).split(',').map(s => s.trim()).filter(Boolean).forEach(alias => {
-          map.set(normName(alias), entry);
-        });
-      }
-
-      // a couple of built-in soft synonyms to be safe even without Aliases
-      if (/^total carbohydrate$/i.test(name)) {
-        map.set(normName('carbohydrates'), entry);
-        map.set(normName('carbs'), entry);
-      }
-      if (/^folate$/i.test(name)) {
-        map.set(normName('vitamin b9'), entry);
-      }
-      if (/^total sugars$/i.test(name)) {
-        map.set(normName('sugars'), entry);
-        map.set(normName('sugar'), entry);
-      }
-    }
-    return map;
+        return {
+          displayName: name,
+          amount,
+          unit: unit.toLowerCase(),
+          nameTokensList: cand.map(tokens) // pre-tokenize candidates
+        };
+      })
+      .filter(Boolean);
   }
 
-  // Compute %DV using dvMap
-  function percentDV(dvMap, name, amount, unit) {
-    const dv = dvMap.get(normName(name));
-    if (!dv) return null;
-    const aligned = convert(Number(amount), unit, dv.unit);
-    if (aligned == null || !isFinite(aligned) || dv.amount <= 0) return null;
-    return Math.round((aligned / dv.amount) * 100);
+  // Fuzzy match a COA nutrient name to best DV entry (score by tokens + levenshtein)
+  function matchDV(dvEntries, rawName) {
+    const tA = tokens(rawName);
+    const keyA = tA.join(''); // for levenshtein baseline
+    let best = null;
+    let bestScore = 0;
+
+    for (const entry of dvEntries) {
+      for (const tB of entry.nameTokensList) {
+        const keyB = tB.join('');
+        const jac = jaccard(tA, tB);                 // 0..1
+        const levDist = lev(keyA, keyB);
+        const levSim = keyA.length + keyB.length
+          ? 1 - levDist / Math.max(keyA.length, keyB.length)
+          : 0;
+        // blend (tuneable)
+        const score = 0.7 * jac + 0.3 * levSim;
+
+        if (score > bestScore) {
+          bestScore = score;
+          best = entry;
+        }
+      }
+    }
+
+    // require decent overlap; tweak threshold if needed
+    return bestScore >= 0.55 ? best : null;
   }
 
   // Parse one comparison line → {name, value, unit}
   function parseComparisonLine(line) {
-    // Examples:
-    // "Vitamin C: 18mg (⬇️ lower than baseline 58mg)"
-    // "Potassium: 350mg (⬆️ higher than baseline 120mg)"
-    // "Calories: 15kcal (⬇️ lower than baseline 32kcal)"
+    // e.g. "Dietary Fiber: 2g (…)", "Vitamin B6 (Pyridoxine): 0.1mg (…)”
     const m = String(line).match(/^([^:]+):\s*([\d.]+)\s*([a-zA-Zµμ]+)\b/);
     if (!m) return null;
     let name = m[1].trim();
-    let val = Number(m[2]);
+    let val  = Number(m[2]);
     let unit = m[3].toLowerCase().replace('µg', 'mcg').replace('μg', 'mcg');
     return { name, value: val, unit };
   }
-  // ------------------ END helpers ------------------
+
+  function percentDV(dvEntry, value, unit) {
+    if (!dvEntry) return null;
+    const aligned = convert(Number(value), unit, dvEntry.unit);
+    if (aligned == null || !isFinite(aligned) || dvEntry.amount <= 0) return null;
+    return Math.round((aligned / dvEntry.amount) * 100);
+  }
+
+  // -----------------------------------------------------------------------------
 
   try {
-    // 1️⃣ Fetch Produce record by SKU
+    // Fetch Produce record
     const produceResponse = await fetch(produceUrl, {
-      headers: {
-        Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
     });
     const produceData = await produceResponse.json();
 
@@ -162,10 +189,10 @@ export default async function handler(req, res) {
 
     const record = produceData.records[0].fields;
 
-    // ➕ ADD: load Daily Values once
-    const dvMap = await loadDailyValues();
+    // Load DV entries (once)
+    const dvEntries = await loadDailyValues();
 
-    // ➕ ADD: build clean nutrients array from "Nutrient Comparison"
+    // Build clean nutrients array from "Nutrient Comparison"
     const comparisonText = record["Nutrient Comparison"] || "";
     const nutrients = String(comparisonText)
       .replace(/\r/g, '')
@@ -175,7 +202,8 @@ export default async function handler(req, res) {
       .map(parseComparisonLine)
       .filter(Boolean)
       .map(({ name, value, unit }) => {
-        const dvPct = percentDV(dvMap, name, value, unit);
+        const dvEntry = matchDV(dvEntries, name);
+        const dvPct = percentDV(dvEntry, value, unit);
         return {
           name,
           value,
@@ -185,22 +213,19 @@ export default async function handler(req, res) {
         };
       });
 
-    // 2️⃣ Defaults for farm fields
+    // Defaults for farm fields
     let farmCertifications = [];
     let farmOwnership = [];
     let farmAcres = null;
     let farmYearCertified = null;
 
-    // 3️⃣ Fetch linked farm record from "SKU Farm"
+    // Fetch linked farm record
     if (record["SKU Farm"] && Array.isArray(record["SKU Farm"]) && record["SKU Farm"].length > 0) {
       const farmId = record["SKU Farm"][0];
       const farmUrl = `https://api.airtable.com/v0/${baseId}/${farmsTable}/${farmId}`;
 
       const farmResponse = await fetch(farmUrl, {
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' },
       });
       const farmData = await farmResponse.json();
 
@@ -212,7 +237,23 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4️⃣ Send response — keep everything, just ADD `nutrients`
+    // Optional debug dump to see matches/thresholds
+    let debug = undefined;
+    if (req.query.debug === '1') {
+      debug = nutrients.map(n => {
+        const dvEntry = matchDV(dvEntries, n.name);
+        return {
+          name: n.name,
+          tokens: tokens(n.name),
+          matchedDV: dvEntry ? { name: dvEntry.displayName, amount: dvEntry.amount, unit: dvEntry.unit } : null,
+          value: n.value,
+          unit: n.unit,
+          dvPercent: n.dvPercent
+        };
+      });
+    }
+
+    // Respond
     res.status(200).json({
       success: true,
       data: {
@@ -228,10 +269,9 @@ export default async function handler(req, res) {
         farmOwnership,
         farmAcres,
         farmYearCertified,
-        // keep raw comparisons if you still want them
         "Nutrient Comparison": record["Nutrient Comparison"] || "",
-        // ➕ computed, clean output for Replo (amount + %DV, no arrows)
-        nutrients
+        nutrients,
+        debug
       }
     });
 
