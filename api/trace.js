@@ -1,13 +1,9 @@
 export default async function handler(req, res) {
-  // ✅ Set CORS headers
+  // ✅ CORS
   res.setHeader("Access-Control-Allow-Origin", "https://www.eatfare.com");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // ✅ Handle preflight OPTIONS request
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
 
   const sku = req.query.sku;
   const AIRTABLE_API_KEY = 'patX9RAJJXpjbOq05.9a2ae2b9e396d5abfb7fe8e894e55321abbcb30db9d77932bff5b0418c41f21a';
@@ -15,9 +11,7 @@ export default async function handler(req, res) {
   const produceTable = 'Produce';
   const farmsTable = 'Farms';
 
-  if (!sku) {
-    return res.status(400).json({ error: 'Missing SKU in query.' });
-  }
+  if (!sku) return res.status(400).json({ error: 'Missing SKU in query.' });
 
   const formula = encodeURIComponent(`{SKU}="${sku}"`);
   const produceUrl = `https://api.airtable.com/v0/${baseId}/${produceTable}?filterByFormula=${formula}`;
@@ -30,7 +24,6 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
       },
     });
-
     const produceData = await produceResponse.json();
 
     if (!produceData.records || produceData.records.length === 0) {
@@ -39,7 +32,7 @@ export default async function handler(req, res) {
 
     const record = produceData.records[0].fields;
 
-    // 2️⃣ Default farm fields (in case farm not found)
+    // 2️⃣ Defaults for farm fields
     let farmCertifications = [];
     let farmOwnership = [];
     let farmAcres = null;
@@ -47,7 +40,7 @@ export default async function handler(req, res) {
 
     // 3️⃣ Fetch linked farm record from "SKU Farm"
     if (record["SKU Farm"] && Array.isArray(record["SKU Farm"]) && record["SKU Farm"].length > 0) {
-      const farmId = record["SKU Farm"][0]; // First linked farm ID
+      const farmId = record["SKU Farm"][0];
       const farmUrl = `https://api.airtable.com/v0/${baseId}/${farmsTable}/${farmId}`;
 
       const farmResponse = await fetch(farmUrl, {
@@ -56,7 +49,6 @@ export default async function handler(req, res) {
           'Content-Type': 'application/json',
         },
       });
-
       const farmData = await farmResponse.json();
 
       if (farmData && farmData.fields) {
@@ -67,7 +59,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4️⃣ Send response
+    // 4️⃣ Send response — 🔴 add "Nutrient Comparison"
     res.status(200).json({
       success: true,
       data: {
@@ -82,7 +74,9 @@ export default async function handler(req, res) {
         farmCertifications,
         farmOwnership,
         farmAcres,
-        farmYearCertified
+        farmYearCertified,
+        // 👇👇👇 THIS is the field your front-end needs
+        "Nutrient Comparison": record["Nutrient Comparison"] || ""
       }
     });
 
