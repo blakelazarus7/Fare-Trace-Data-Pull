@@ -16,6 +16,122 @@ export default async function handler(req, res) {
   const formula = encodeURIComponent(`{SKU}="${sku}"`);
   const produceUrl = `https://api.airtable.com/v0/${baseId}/${produceTable}?filterByFormula=${formula}`;
 
+  // ------------------ ADD: helpers for DV + parsing ------------------
+  const DV_TABLE = 'Daily Value';
+
+  // Parse "900mcg", "65 g", "2,000kcal" → { amount: 900, unit: 'mcg' }
+  function parseAmountUnit(str) {
+    if (!str) return { amount: null, unit: '' };
+    const s = String(str).trim().replace(/,/g, '');
+    const m = s.match(/^([\d.]+)\s*([a-zA-Zµμ]+)?$/);
+    if (!m) return { amount: null, unit: '' };
+    let unit = (m[2] || '').toLowerCase().replace('µg', 'mcg').replace('μg', 'mcg');
+    return { amount: Number(m[1]), unit };
+  }
+
+  // Normalize names for soft matching
+  function normName(s) {
+    if (!s) return '';
+    let k = String(s).toLowerCase().trim();
+    // unify common variants
+    k = k.replace(/\bvitamin\s*b9\b/g, 'folate');
+    k = k.replace(/\bcarbohydrate(s)?\b/g, 'total carbohydrate');
+    k = k.replace(/\bcarbs?\b/g, 'total carbohydrate');
+    k = k.replace(/\bsugar(s)?\b/g, 'total sugars');
+    // collapse and strip
+    k = k.replace(/\s+/g, '');
+    k = k.replace(/[^a-z0-9]/g, '');
+    return k;
+  }
+
+  // Basic mass conversions
+  function convert(value, from, to) {
+    if (value == null || isNaN(value)) return null;
+    const f = (from || '').toLowerCase(), t = (to || '').toLowerCase();
+    if (!f || !t || f === t) return value;
+    if (f === 'g'   && t === 'mg')  return value * 1000;
+    if (f === 'mg'  && t === 'g')   return value / 1000;
+    if (f === 'mg'  && t === 'mcg') return value * 1000;
+    if (f === 'mcg' && t === 'mg')  return value / 1000;
+    if (f === 'g'   && t === 'mcg') return value * 1_000_000;
+    if (f === 'mcg' && t === 'g')   return value / 1_000_000;
+    return value; // kcal, IU, etc → pass through (no %DV calc unless DV uses same unit)
+  }
+
+  // Fetch DV table, build soft-match map: normalized name/alias → { amount, unit, displayName }
+  async function loadDailyValues() {
+    const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(DV_TABLE)}`;
+    const headers = { Authorization: `Bearer ${AIRTABLE_API_KEY}`, 'Content-Type': 'application/json' };
+    let records = [], offset = null;
+    do {
+      const url = offset ? `${baseUrl}?offset=${offset}` : baseUrl;
+      const resp = await fetch(url, { headers });
+      const json = await resp.json();
+      records = records.concat(json.records || []);
+      offset = json.offset;
+    } while (offset);
+
+    const map = new Map();
+    for (const r of records) {
+      const name = r.fields['Name'];
+      const dvStr = r.fields['Daily Value']; // single text like "900mcg", "65g", "2000kcal"
+      if (!name || !dvStr) continue;
+      const { amount, unit } = parseAmountUnit(dvStr);
+      if (amount == null || !unit) continue;
+
+      const entry = { amount, unit, displayName: name };
+
+      // primary key
+      map.set(normName(name), entry);
+
+      // optional: support "Aliases" column (comma separated). If you don’t have it, this is harmless.
+      const aliases = r.fields['Aliases'];
+      if (aliases) {
+        String(aliases).split(',').map(s => s.trim()).filter(Boolean).forEach(alias => {
+          map.set(normName(alias), entry);
+        });
+      }
+
+      // a couple of built-in soft synonyms to be safe even without Aliases
+      if (/^total carbohydrate$/i.test(name)) {
+        map.set(normName('carbohydrates'), entry);
+        map.set(normName('carbs'), entry);
+      }
+      if (/^folate$/i.test(name)) {
+        map.set(normName('vitamin b9'), entry);
+      }
+      if (/^total sugars$/i.test(name)) {
+        map.set(normName('sugars'), entry);
+        map.set(normName('sugar'), entry);
+      }
+    }
+    return map;
+  }
+
+  // Compute %DV using dvMap
+  function percentDV(dvMap, name, amount, unit) {
+    const dv = dvMap.get(normName(name));
+    if (!dv) return null;
+    const aligned = convert(Number(amount), unit, dv.unit);
+    if (aligned == null || !isFinite(aligned) || dv.amount <= 0) return null;
+    return Math.round((aligned / dv.amount) * 100);
+  }
+
+  // Parse one comparison line → {name, value, unit}
+  function parseComparisonLine(line) {
+    // Examples:
+    // "Vitamin C: 18mg (⬇️ lower than baseline 58mg)"
+    // "Potassium: 350mg (⬆️ higher than baseline 120mg)"
+    // "Calories: 15kcal (⬇️ lower than baseline 32kcal)"
+    const m = String(line).match(/^([^:]+):\s*([\d.]+)\s*([a-zA-Zµμ]+)\b/);
+    if (!m) return null;
+    let name = m[1].trim();
+    let val = Number(m[2]);
+    let unit = m[3].toLowerCase().replace('µg', 'mcg').replace('μg', 'mcg');
+    return { name, value: val, unit };
+  }
+  // ------------------ END helpers ------------------
+
   try {
     // 1️⃣ Fetch Produce record by SKU
     const produceResponse = await fetch(produceUrl, {
@@ -31,6 +147,29 @@ export default async function handler(req, res) {
     }
 
     const record = produceData.records[0].fields;
+
+    // ➕ ADD: load Daily Values once
+    const dvMap = await loadDailyValues();
+
+    // ➕ ADD: build clean nutrients array from "Nutrient Comparison"
+    const comparisonText = record["Nutrient Comparison"] || "";
+    const nutrients = String(comparisonText)
+      .replace(/\r/g, '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(parseComparisonLine)
+      .filter(Boolean)
+      .map(({ name, value, unit }) => {
+        const dvPct = percentDV(dvMap, name, value, unit);
+        return {
+          name,
+          value,
+          unit,
+          amount: `${value}${unit}`,
+          dvPercent: dvPct
+        };
+      });
 
     // 2️⃣ Defaults for farm fields
     let farmCertifications = [];
@@ -59,7 +198,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4️⃣ Send response — 🔴 add "Nutrient Comparison"
+    // 4️⃣ Send response — keep everything, just ADD `nutrients`
     res.status(200).json({
       success: true,
       data: {
@@ -75,8 +214,10 @@ export default async function handler(req, res) {
         farmOwnership,
         farmAcres,
         farmYearCertified,
-        // 👇👇👇 THIS is the field your front-end needs
-        "Nutrient Comparison": record["Nutrient Comparison"] || ""
+        // keep raw comparisons if you still want them
+        "Nutrient Comparison": record["Nutrient Comparison"] || "",
+        // ➕ computed, clean output for Replo (amount + %DV, no arrows)
+        nutrients
       }
     });
 
